@@ -1,10 +1,11 @@
 """Pre-label B3D test clips: Faster R-CNN detection at native scale over the padded mask region.
 
 For each test segment, reads every source frame (29.97 FPS), crops the mask's crop box padded
-by PAD without blacking out the mask, and runs the fine-tuned detectron2 model (train_frcnn.py)
-on that region in one pass. Boxes are written in full-frame 4K source coordinates; conversion
-to experiment coordinates, score thresholding, and tracking happen in track.py, so this
-expensive step runs once. Runs in tetris-annotate-d2 (Python 3.7).
+by PAD without blacking out the mask, and runs the fine-tuned detectron2 model on that region in
+one pass. --weights is a directory with config.yaml and model_final.pth: by default the published
+weights from download_weights.sh, or a train_frcnn.py run directory such as /out/runs/frcnn-b3d.
+Boxes are written in full-frame 4K source coordinates; conversion to experiment coordinates,
+score thresholding, and tracking happen in track.py, so this expensive step runs once.
 
 Output: <out>/<dataset>/teNN.jsonl, one row per source frame:
   {"frame_idx": i, "source_frame": start + i, "detections": [[x1, y1, x2, y2, score], ...]}
@@ -27,7 +28,7 @@ PAD = 480
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Faster R-CNN pre-labels for B3D test clips')
-    parser.add_argument('--weights', default='/out/runs/frcnn-b3d')
+    parser.add_argument('--weights', default='/out/weights/frcnn-b3d')
     parser.add_argument('--threshold', type=float, default=0.1)
     parser.add_argument('--datasets', nargs='+', default=list(VIDEOS))
     parser.add_argument('--segments', nargs='+', type=int, default=TEST_SEGMENTS)

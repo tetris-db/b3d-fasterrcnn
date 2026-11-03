@@ -6,28 +6,36 @@ The resulting tracks (`frcnn-b3d`, score threshold 0.2) are the pre-labels the h
 
 ## Pipeline
 
-Everything runs through `./run`, which starts a throwaway container on the GPU server with `/data/cwkt/data/polyis-data/sources` read-only at `/sources`, the sibling `../tetris` checkout read-only at `/tetris`, and `/data/cwkt/data/tetris-annotate` at `/out`.
-Two images are used:
-
-- `tetris-annotate-d2` (default): B3D's own detectron2 image plus wandb, for crops, training, and detection.
-  Build it with `docker build -t b3d-detectron2 modules/b3d && docker build -f Dockerfile.detectron2 -t tetris-annotate-d2 .`
-- `polyis-polyis`: Tetris's image, for tracking with its compiled Cython OC-SORT.
+Everything runs in one image built from `Dockerfile` (B3D's detectron2 environment: Python 3.7, PyTorch 1.10, CUDA 11.3), through `./run`, which starts a throwaway container with `/data/cwkt/data/polyis-data/sources` read-only at `/sources` and `/data/cwkt/data/tetris-annotate` at `/out`.
 
 ```sh
+docker build -t b3d-fasterrcnn .
+./run setup.py build_ext --inplace                   # compile the Cython OC-SORT in ocsort/
+
+# Either download the published weights (needs the hf CLI on the host)...
+./download_weights.sh                                # /data/cwkt/data/tetris-annotate/weights/frcnn-b3d
+# ...or train them.
 ./run prep_crops.py                                  # /out/dataset-crops-b3d
 CUDA_VISIBLE_DEVICES=0,1,2,3 ./run train_frcnn.py    # /out/runs/frcnn-b3d (4 GPUs, 6 epochs)
+
 ./run detect.py                                      # /out/detections30-frcnn-b3d/<dataset>/teNN.jsonl
-IMAGE=polyis-polyis CUDA_VISIBLE_DEVICES= ./run track.py   # /out/gt30-frcnn-b3d-t0.2/<dataset>/teNN.mp4/
+CUDA_VISIBLE_DEVICES= ./run track.py                 # /out/gt30-frcnn-b3d-t0.2/<dataset>/teNN.mp4/
 ```
 
+`detect.py` reads `/out/weights/frcnn-b3d` by default; pass `--weights /out/runs/frcnn-b3d` to use a training run instead.
 The defaults reproduce the run behind the pre-labels.
 The original detection pass reused the even frames of an identical earlier 15 FPS pass of the same model and filled in the odd frames; running `detect.py` from scratch gives the same rows.
+
+`publish_weights.sh <run directory>` uploads `config.yaml`, `model_final.pth`, and `model_card.md` to the Hugging Face repo in `hub.env` with the `hf` CLI, after checking `model_final.pth` against `weights.sha256`; `download_weights.sh` checks the same hash.
+
+`ocsort/` is Tetris's Cython OC-SORT (`polyis/tracker/ocsort/cython` at commit 8404d4f) with `lapjv` from github.com/chanwutk/lap (BSD-2-Clause, `ocsort/lapjv/LICENSE`), built with Tetris's compiler flags and directives (`setup.py`).
+Rebuilt here, it reproduces Tetris's tracks byte for byte.
 
 ## What each step does
 
 - **Training data** (`prep_crops.py`): B3D's labeled crops (`/sources/b3d-vision`) with B3D's own train/val/test split, at native scale.
   Crops longer than 1,408 px on a side are cut into overlapping windows (256 px overlap, no resizing or padding), and boxes are clipped to each window and kept if at least 25% remains.
-- **Training** (`train_frcnn.py`): detectron2 `faster_rcnn_X_101_32x8d_FPN_3x` from its COCO checkpoint, following `modules/b3d/train.py`.
+- **Training** (`train_frcnn.py`): detectron2 `faster_rcnn_X_101_32x8d_FPN_3x` from its COCO checkpoint, following B3D's `train.py` (github.com/b3d-project/b3d).
   One `vehicle` class, native scale (`MIN_SIZE_TRAIN = (0,)`, `MIN_SIZE_TEST = 0`), anchors 16-256 px, flips, 90-degree rotations and mild brightness/contrast, SGD at 0.01 with batch 8 and 10x drops at 70% and 90% of 6 epochs, and validation every epoch.
   Logs go to wandb `chanwutk-berkeley/Tetris`.
 - **Detection** (`detect.py`): every source frame (29.97 FPS) of each test segment, at native 4K resolution.
@@ -36,7 +44,7 @@ The original detection pass reused the even frames of an identical earlier 15 FP
   Boxes with score at least 0.1 are written in source-frame coordinates.
 - **Tracking** (`track.py`): each detection is mapped into Tetris's 1080x720 experiment frame (crop offset, rotation of vertical regions, resize, as in `tetris/preprocess/p000_preprocess_dataset.py`) and shrunk to its visible extent, the bounding box of its pixels inside the road mask.
   It is kept if its score is at least 0.2 and at least 25% of its pixels lie inside the mask.
-  The kept boxes are tracked at 30 FPS with p003's tracker (`tetris/preprocess/p003_preprocess_groundtruth_tracking.py`): the Cython OC-SORT with `tetris/configs/trackers.yaml` and `register_tracked_detections` gap interpolation.
+  The kept boxes are tracked at 30 FPS with Tetris's ground-truth tracker (`tetris/preprocess/p003_preprocess_groundtruth_tracking.py`): the Cython OC-SORT in `ocsort/` with the settings of `tetris/configs/trackers.yaml` and linear gap interpolation, copied into `track.py`.
   `{detection,tracking}30.jsonl` hold every source frame.
   `{detection,tracking}.jsonl` hold the experiment clip's frames: clip frame `k` of `jncN/test/teNN.mp4` is source frame `start + (start mod 2) + 2k`, the even source frames of the segment.
 
