@@ -15,4 +15,4 @@ It generated the pre-labels that were human-corrected into the B3D test-set grou
 - `config.yaml`: the detectron2 config of the training run (input resizing disabled, 500 detections per image).
 - `model_final.pth`: the final weights (sha256 `f7caab8f1994c737eb3a3c5ac84a31a70db1b1651bff4ae43ceb66804d011174`).
 
-Training, detection, and tracking code: https://github.com/chanwutk/b3d-fasterrcnn (`download_weights.sh` fetches these files, and `detect.py` runs them).
+Training, detection, and tracking code: https://github.com/tetris-db/b3d-fasterrcnn (`download_weights.sh` fetches these files, and `detect.py` runs them).
