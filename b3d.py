@@ -8,12 +8,12 @@ import cv2
 import numpy as np
 
 
-# Host /polyis-data/sources is mounted read-only at /sources by ./run.
+# Host sources (download_data.sh) are mounted read-only at /sources by ./run.
 SOURCES = '/sources'
 # B3D human-labeled training crops (COCO JSON + images), from the b3d-project/b3d repo.
 VISION = os.path.join(SOURCES, 'b3d-vision', 'vision')
-# CVAT XML holding each video's 'crop' box and 'domain' polygons.
-MASKS = os.path.join(SOURCES, 'b3d', 'annotations.xml')
+# CVAT XML holding each video's 'crop' box and 'domain' (road) polygons, kept in this repository.
+MASKS = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'annotations.xml')
 # Native-resolution (3840x2160) source videos of the four B3D test datasets.
 VIDEOS = {
     'jnc0': os.path.join(SOURCES, 'jnc0', 'jnc00.mp4'),
