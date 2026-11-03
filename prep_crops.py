@@ -1,57 +1,90 @@
-"""B3D's labeled crops as detectron2 COCO datasets, at native scale and without padding.
+"""B3D's labeled crops as a detectron2 COCO dataset, at native scale and without padding.
 
-Two splits:
-  groups: the same crop-group split as prep_data.py (RF-DETR's data), so held-out scores compare.
-  b3d:    B3D's own train/val/test JSONs (which mix crops of one frame across splits).
+Uses B3D's own train/val/test JSONs (the split the frcnn-b3d model was trained on).
 Crops are kept as-is (files copied byte for byte), except crops longer than MAX_SIDE on a
 side, which would not fit in GPU memory at native scale: those are cut into overlapping
-windows of at most MAX_SIDE (no resizing, no padding), with boxes clipped as in prep_data.py.
+windows of at most MAX_SIDE (no resizing, no padding), with boxes clipped to each window.
+Runs in tetris-annotate-d2 (Python 3.7).
 """
+from __future__ import annotations
+
 import argparse
 import json
+import math
 import os
 import shutil
 
 import cv2
 
-from b3d import OVERLAP, VISION, tile_origins
-from prep_data import load_crops, split_groups, window_boxes
+from b3d import VISION
 
 
-# Longest crop side trained at native scale in one piece (2 x the 704 detector tile).
+# Longest crop side trained at native scale in one piece.
 MAX_SIDE = 1408
+# Window overlap in pixels; covers the p99 longest side of B3D labeled vehicles (227 px).
+OVERLAP = 256
+# Fraction of a box that must stay inside a window for the box to be kept.
+MIN_VISIBLE = 0.25
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description='B3D crops as native-scale detectron2 datasets')
-    parser.add_argument('--split', choices=['groups', 'b3d'], required=True)
-    parser.add_argument('--out', default=None)
-    parser.add_argument('--seed', type=int, default=0)
+    parser = argparse.ArgumentParser(description='B3D crops as a native-scale detectron2 dataset')
+    parser.add_argument('--out', default='/out/dataset-crops-b3d')
     return parser.parse_args()
+
+
+def load_crops() -> list[tuple[str, dict, list[dict]]]:
+    """All B3D crops as (image path, COCO image entry, its annotations), across B3D's three splits."""
+    crops = []
+    for split in ['train', 'val', 'test']:
+        coco = json.load(open(os.path.join(VISION, 'annotations', f'{split}.json')))
+        # Index this split's boxes by image id.
+        boxes: dict[int, list[dict]] = {}
+        for annotation in coco['annotations']:
+            boxes.setdefault(annotation['image_id'], []).append(annotation)
+        for image in coco['images']:
+            crops.append((os.path.join(VISION, 'images', split, image['file_name']), image, boxes.get(image['id'], [])))
+    return crops
+
+
+def window_origins(length: int) -> list[int]:
+    """Evenly spaced window starts covering [0, length) with at least OVERLAP pixels shared."""
+    # Fewest windows whose stride does not exceed MAX_SIDE - OVERLAP, with both edge windows flush.
+    count = math.ceil((length - MAX_SIDE) / (MAX_SIDE - OVERLAP)) + 1
+    return [round(i * (length - MAX_SIDE) / (count - 1)) for i in range(count)]
 
 
 def windows(length: int) -> list[tuple[int, int]]:
     """(start, size) of windows covering [0, length), each at most MAX_SIDE long."""
     if length <= MAX_SIDE:
         return [(0, length)]
-    return [(start, MAX_SIDE) for start in tile_origins(length, MAX_SIDE, OVERLAP)]
+    return [(start, MAX_SIDE) for start in window_origins(length)]
+
+
+def window_boxes(annotations: list[dict], x0: int, y0: int) -> list[list[float]]:
+    """Boxes (COCO xywh) clipped to the MAX_SIDE square at (x0, y0), dropping those under MIN_VISIBLE."""
+    kept = []
+    for annotation in annotations:
+        x, y, w, h = annotation['bbox']
+        # Clip the box to the window and measure what fraction survives.
+        left, top = max(x, x0), max(y, y0)
+        right, bottom = min(x + w, x0 + MAX_SIDE), min(y + h, y0 + MAX_SIDE)
+        if right <= left or bottom <= top or (right - left) * (bottom - top) < MIN_VISIBLE * w * h:
+            continue
+        kept.append([left - x0, top - y0, right - left, bottom - top])
+    return kept
 
 
 def main():
     args = parse_args()
-    out = args.out or f'/out/dataset-crops-{args.split}'
     crops = load_crops()
-    # Split name of every crop: by crop group (as for RF-DETR), or B3D's own split directory.
-    if args.split == 'groups':
-        assignment = split_groups(crops, 0.1, 0.1, args.seed)
-        split_of = [assignment[image['file_name'].split('_')[0]] for _, image, _ in crops]
-    else:
-        split_of = [{'train': 'train', 'val': 'valid', 'test': 'test'}[path.split(os.sep)[-2]] for path, _, _ in crops]
+    # Split name of every crop: B3D's own split directory.
+    split_of = [{'train': 'train', 'val': 'valid', 'test': 'test'}[path.split(os.sep)[-2]] for path, _, _ in crops]
 
     datasets = {}
     for split in ['train', 'valid', 'test']:
-        shutil.rmtree(os.path.join(out, split), ignore_errors=True)
-        os.makedirs(os.path.join(out, split))
+        shutil.rmtree(os.path.join(args.out, split), ignore_errors=True)
+        os.makedirs(os.path.join(args.out, split))
         datasets[split] = {'images': [], 'annotations': [], 'categories': [{'id': 1, 'name': 'vehicle', 'supercategory': 'none'}]}
 
     for (path, image, annotations), split in zip(crops, split_of):
@@ -63,7 +96,7 @@ def main():
             if len(pieces) == 1:
                 # Small enough: keep the original file and its boxes untouched.
                 name = image['file_name']
-                shutil.copyfile(path, os.path.join(out, split, name))
+                shutil.copyfile(path, os.path.join(args.out, split, name))
                 boxes = [a['bbox'] for a in annotations]
             else:
                 # Oversized: a native-scale window, boxes clipped to it.
@@ -71,9 +104,9 @@ def main():
                 if not window.any():
                     continue
                 name = f"{image['file_name'][:-4]}_{x0}_{y0}.jpg"
-                cv2.imwrite(os.path.join(out, split, name), window, [cv2.IMWRITE_JPEG_QUALITY, 95])
+                cv2.imwrite(os.path.join(args.out, split, name), window, [cv2.IMWRITE_JPEG_QUALITY, 95])
                 # The uncut axis spans the whole crop, so clipping to a MAX_SIDE square is exact.
-                boxes = window_boxes(annotations, x0, y0, MAX_SIDE)
+                boxes = window_boxes(annotations, x0, y0)
             image_id = len(dataset['images'])
             dataset['images'].append({'id': image_id, 'file_name': name, 'width': w, 'height': h})
             for box in boxes:
@@ -83,7 +116,7 @@ def main():
                 })
 
     for split, dataset in datasets.items():
-        with open(os.path.join(out, split, '_annotations.coco.json'), 'w') as f:
+        with open(os.path.join(args.out, split, '_annotations.coco.json'), 'w') as f:
             json.dump(dataset, f)
         sides = [max(i['width'], i['height']) for i in dataset['images']]
         print(f"{split}: {len(dataset['images'])} images, {len(dataset['annotations'])} boxes, longest side {max(sides)}")

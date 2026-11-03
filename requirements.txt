@@ -1,7 +1,0 @@
-rfdetr[train,augment]==1.11.2
-supervision==0.31.0
-opencv-python-headless==5.0.0.93
-albumentations==2.0.8
-wandb==0.31.0
-filterpy==1.4.5
-lap==0.5.13

@@ -1,9 +1,10 @@
 """Fine-tune detectron2 Faster R-CNN X101-FPN on B3D crops (prep_crops.py), following B3D's train.py.
 
 modules/b3d/train.py registers the COCO crops, loads a model-zoo config with its COCO checkpoint,
-sets one class, and trains with detectron2's DefaultTrainer. This keeps that and changes what the
-comparison with RF-DETR needs: native scale (no resizing), RF-DETR's label-preserving aerial
-augmentations, detectron2's standard fine-tuning schedule, validation every epoch, and wandb.
+sets one class, and trains with detectron2's DefaultTrainer. This keeps that and adds native
+scale (no resizing), label-preserving aerial augmentations (flips, 90-degree rotations, mild
+brightness/contrast), detectron2's standard fine-tuning schedule, validation every epoch, and wandb.
+The defaults reproduce the frcnn-b3d model that generated the B3D pre-labels.
 Runs in tetris-annotate-d2 (B3D's Docker image plus wandb), which is Python 3.7.
 """
 import argparse
@@ -28,13 +29,13 @@ CONFIG = 'COCO-Detection/faster_rcnn_X_101_32x8d_FPN_3x.yaml'
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Fine-tune Faster R-CNN X101-FPN on B3D crops')
-    parser.add_argument('--dataset', default='/out/dataset-crops-groups')
-    parser.add_argument('--output', default='/out/runs/frcnn-groups')
-    parser.add_argument('--run', default='annotate-frcnn-x101-groups')
+    parser.add_argument('--dataset', default='/out/dataset-crops-b3d')
+    parser.add_argument('--output', default='/out/runs/frcnn-b3d')
+    parser.add_argument('--run', default='annotate-frcnn-x101-b3d')
     parser.add_argument('--epochs', type=int, default=6)
-    parser.add_argument('--batch', type=int, default=4)
-    parser.add_argument('--lr', type=float, default=0.005)
-    parser.add_argument('--gpus', type=int, default=2)
+    parser.add_argument('--batch', type=int, default=8)
+    parser.add_argument('--lr', type=float, default=0.01)
+    parser.add_argument('--gpus', type=int, default=4)
     parser.add_argument('--workers', type=int, default=4)
     parser.add_argument('--resume', action='store_true')
     return parser.parse_args()
@@ -43,7 +44,7 @@ def parse_args():
 class Trainer(DefaultTrainer):
     @classmethod
     def build_train_loader(cls, cfg):
-        # Flips, 90-degree rotations, and mild brightness/contrast, as RF-DETR's AUG_AERIAL; no resizing.
+        # Flips, 90-degree rotations, and mild brightness/contrast; no resizing.
         augmentations = [
             T.RandomFlip(horizontal=True, vertical=False),
             T.RandomFlip(horizontal=False, vertical=True),

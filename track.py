@@ -4,16 +4,15 @@ Per clip, each 4K detection is mapped into the 1080x720 experiment frame the way
 tetris/preprocess/p000_preprocess_dataset.py builds it (crop, rotate vertical regions,
 resize). It is shrunk to its visible extent inside the road mask and kept if its score is at
 least --threshold and at least MIN_VISIBLE of its pixels lie in the mask. The kept boxes are
-tracked with the same OC-SORT code, settings, and gap interpolation as
-tetris/preprocess/p003_preprocess_groundtruth_tracking.py, imported read-only from /tetris.
-Output mirrors the cache's 003_groundtruth layout: <out>/<dataset>/teNN.mp4/{detection,tracking}.jsonl.
+tracked at 30 FPS over every source frame of the segment, with the same Cython OC-SORT code,
+settings, and gap interpolation as tetris/preprocess/p003_preprocess_groundtruth_tracking.py,
+imported read-only from /tetris. Runs in the polyis image (IMAGE=polyis-polyis ./run track.py),
+whose Python matches the compiled tracker.
 
---fps 15 (detect.py default): input is the clip's 15 FPS frames; tracked as is.
---fps 30 (detect.py --step 1): input is every source frame of the segment, tracked at 30 FPS like
-  p003. The 30 FPS results go to {detection30,tracking30}.jsonl, and detection.jsonl /
-  tracking.jsonl hold them sampled at the clip's frames (even source frames) for evaluation.
-
---verify reruns p003 on an existing 003_groundtruth clip to check the reuse reproduces it.
+Output mirrors the cache's 003_groundtruth layout under <out>/<dataset>/teNN.mp4/:
+  detection30.jsonl, tracking30.jsonl  every source frame (30 FPS)
+  detection.jsonl, tracking.jsonl      the same, sampled at the experiment clip's frames (15 FPS);
+                                       these are the pre-labels given to human review
 """
 import argparse
 import json
@@ -25,8 +24,7 @@ import cv2
 import numpy as np
 import yaml
 
-from b3d import VIDEOS, load_crop_and_mask
-from detect import TEST_SEGMENTS, segment_range
+from b3d import TEST_SEGMENTS, VIDEOS, load_crop_and_mask, segment_range
 
 # tetris checkout, mounted read-only by ./run.
 TETRIS = '/tetris'
@@ -44,13 +42,11 @@ MIN_VISIBLE = 0.25
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Experiment-coordinate GT detections and OC-SORT tracks')
-    parser.add_argument('--detections', default='/out/detections')
-    parser.add_argument('--out', default='/out/groundtruth')
+    parser.add_argument('--detections', default='/out/detections30-frcnn-b3d')
+    parser.add_argument('--out', default='/out/gt30-frcnn-b3d-t0.2')
     parser.add_argument('--threshold', type=float, default=0.2)
-    parser.add_argument('--fps', type=int, choices=[15, 30], default=15)
     parser.add_argument('--datasets', nargs='+', default=list(VIDEOS))
     parser.add_argument('--segments', nargs='+', type=int, default=TEST_SEGMENTS)
-    parser.add_argument('--verify', nargs=2, metavar=('DETECTION', 'TRACKING'), default=None)
     return parser.parse_args()
 
 
@@ -109,26 +105,8 @@ def to_experiment(detection: list[float], box: tuple[int, int, int, int], mask: 
     return [vx1 * sx, vy1 * sy, vx2 * sx, vy2 * sy, detection[4]]
 
 
-def verify(detection_path: str, tracking_path: str):
-    """Rerun p003 (30 FPS tracking, then every 2nd frame) on an existing clip and diff the tracks."""
-    frames = [row['detections'] for row in map(json.loads, open(detection_path))]
-    frame_tracks = track(frames)
-    # p003's prepare_frame_tracks_for_save for clips above 15 FPS.
-    sampled = {i: frame_tracks.get(source, []) for i, source in enumerate(range(0, len(frames), 2))}
-    expected = [row['tracks'] for row in map(json.loads, open(tracking_path))]
-    assert len(expected) == len(sampled), (len(expected), len(sampled))
-    mismatched = sum(
-        sorted(map(tuple, np.round(sampled[i], 3).tolist())) != sorted(map(tuple, np.round(tracks, 3).tolist()))
-        for i, tracks in enumerate(expected)
-    )
-    print(f'{mismatched} of {len(expected)} frames differ from {tracking_path}')
-
-
 def main():
     args = parse_args()
-    if args.verify:
-        verify(*args.verify)
-        return
 
     for dataset in args.datasets:
         cap = cv2.VideoCapture(VIDEOS[dataset])
@@ -149,19 +127,18 @@ def main():
                 frame_tracks.setdefault(frame_idx, [])
             out = os.path.join(args.out, dataset, f'te{segment:02d}.mp4')
             os.makedirs(out, exist_ok=True)
-            if args.fps == 30:
-                start, end = segment_range(total, segment)
-                assert rows[0]['source_frame'] == start and len(rows) == end - start, f'{dataset} te{segment:02d}: not a full 30 FPS segment'
-                write_detections(frames, os.path.join(out, 'detection30.jsonl'))
-                save_tracking_results(dict(frame_tracks), os.path.join(out, 'tracking30.jsonl'))
-                # Clip frame k is source frame start + (start mod 2) + 2k, i.e. input row (start mod 2) + 2k.
-                sampled = list(range(start % 2, end - start, 2))
-                frames = [frames[i] for i in sampled]
-                frame_tracks = {k: frame_tracks[i] for k, i in enumerate(sampled)}
+            start, end = segment_range(total, segment)
+            assert rows[0]['source_frame'] == start and len(rows) == end - start, f'{dataset} te{segment:02d}: not a full 30 FPS segment'
+            write_detections(frames, os.path.join(out, 'detection30.jsonl'))
+            save_tracking_results(dict(frame_tracks), os.path.join(out, 'tracking30.jsonl'))
+            # Clip frame k is source frame start + (start mod 2) + 2k, i.e. input row (start mod 2) + 2k.
+            sampled = list(range(start % 2, end - start, 2))
+            frames = [frames[i] for i in sampled]
+            frame_tracks = {k: frame_tracks[i] for k, i in enumerate(sampled)}
             write_detections(frames, os.path.join(out, 'detection.jsonl'))
             save_tracking_results(frame_tracks, os.path.join(out, 'tracking.jsonl'))
             ids = {t[0] for tracks in frame_tracks.values() for t in tracks}
-            print(f'{dataset} te{segment:02d}: {len(rows)} frames tracked at {args.fps} FPS, {len(frames)} clip frames, '
+            print(f'{dataset} te{segment:02d}: {len(rows)} frames tracked at 30 FPS, {len(frames)} clip frames, '
                   f'{sum(map(len, frames))} boxes, {len(ids)} tracks', flush=True)
 
 

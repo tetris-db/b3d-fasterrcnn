@@ -1,6 +1,7 @@
 #!/bin/sh
-# Run a Python script in a throwaway tetris-annotate container on the GPU server.
-# Usage: ./run viz_tiles.py [args...]
+# Run a Python script in a throwaway container on the GPU server.
+# Usage: ./run detect.py [args...]                  (tetris-annotate-d2: prep_crops, train_frcnn, detect)
+#        IMAGE=polyis-polyis ./run track.py [args...] (the tetris image, for its compiled OC-SORT)
 set -eu
 cd "$(dirname "$0")"
 # ponytail: host paths default to ace's layout; override DATA on other servers.
@@ -15,4 +16,4 @@ docker run --rm --gpus all --shm-size 16g -e CUDA_VISIBLE_DEVICES \
   -v "$PWD/../tetris:/tetris:ro" \
   -v "$DATA/tetris-annotate:/out" \
   -v "$HOME/.netrc:/root/.netrc:ro" \
-  "${IMAGE:-tetris-annotate}" python "$@"
+  "${IMAGE:-tetris-annotate-d2}" python "$@"

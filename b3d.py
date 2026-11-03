@@ -1,7 +1,6 @@
-"""Shared B3D helpers: paths, per-video crop region and mask, and inference tiling."""
+"""Shared B3D helpers: paths and the per-video crop region and road mask."""
 from __future__ import annotations
 
-import math
 import os
 from xml.etree import ElementTree
 
@@ -22,10 +21,15 @@ VIDEOS = {
     'jnc6': os.path.join(SOURCES, 'jnc6', 'jnc06.mp4'),
     'jnc7': os.path.join(SOURCES, 'jnc7', 'jnc07.mp4'),
 }
-# Detector input size; RF-DETR-Large's default square resolution.
-TILE = 704
-# Tile overlap in pixels; covers the p99 longest side of B3D labeled vehicles (227 px).
-OVERLAP = 256
+# Segments per source video, and the five test segments (jncN/test/teNN.mp4) of every B3D dataset.
+NUM_SEGMENTS = 18
+TEST_SEGMENTS = [1, 4, 8, 12, 13]
+
+
+def segment_range(total_frames: int, segment: int) -> tuple[int, int]:
+    """Source-frame range [start, end) of a segment; mirrors tetris get_segment_frame_range."""
+    size = total_frames / NUM_SEGMENTS
+    return int(segment * size), min(int((segment + 1) * size), total_frames)
 
 
 def load_crop_and_mask(video_path: str, width: int, height: int) -> tuple[tuple[int, int, int, int], np.ndarray]:
@@ -51,36 +55,3 @@ def load_crop_and_mask(video_path: str, width: int, height: int) -> tuple[tuple[
         cv2.fillPoly(mask, [points.round().astype(np.int32)], 255)
     # Keep only the crop region of the mask.
     return (left, top, right, bottom), mask[top:bottom, left:right]
-
-
-def tile_origins(length: int, tile: int = TILE, overlap: int = OVERLAP) -> list[int]:
-    """Evenly spaced tile starts covering [0, length) with at least `overlap` pixels shared."""
-    # A region no longer than one tile needs a single tile (padded by the caller).
-    if length <= tile:
-        return [0]
-    # Fewest tiles whose stride does not exceed tile - overlap, with both edge tiles flush.
-    count = math.ceil((length - tile) / (tile - overlap)) + 1
-    return [round(i * (length - tile) / (count - 1)) for i in range(count)]
-
-
-def tiles(mask: np.ndarray, tile: int = TILE, overlap: int = OVERLAP) -> list[tuple[int, int]]:
-    """Top-left corners of tiles over the crop region that contain any masked-in pixel."""
-    height, width = mask.shape
-    return [
-        (x, y)
-        for y in tile_origins(height, tile, overlap)
-        for x in tile_origins(width, tile, overlap)
-        # Skip tiles that fall entirely outside the road domain.
-        if mask[y:y + tile, x:x + tile].any()
-    ]
-
-
-if __name__ == '__main__':
-    # Self-check for tile_origins: full coverage, flush edges, and the overlap bound.
-    for length in [100, 704, 705, 1240, 1938, 2031, 5000]:
-        starts = tile_origins(length)
-        assert starts[0] == 0 and starts[-1] + TILE >= length
-        if length > TILE:
-            assert starts[-1] + TILE == length
-            assert all(b - a <= TILE - OVERLAP for a, b in zip(starts, starts[1:]))
-    print('ok')
