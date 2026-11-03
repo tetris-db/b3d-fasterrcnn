@@ -1,0 +1,3 @@
+[submodule "modules/b3d"]
+	path = modules/b3d
+	url = https://github.com/b3d-project/b3d.git

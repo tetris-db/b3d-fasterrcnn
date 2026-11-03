@@ -1,0 +1,5 @@
+# B3D's own detectron2 image (modules/b3d/Dockerfile, unchanged) plus logging for train_frcnn.py.
+# Build: docker build -t b3d-detectron2 modules/b3d && docker build -f Dockerfile.detectron2 -t tetris-annotate-d2 .
+FROM b3d-detectron2
+
+RUN pip install --no-cache-dir wandb==0.18.7 tensorboard==2.11.2
