@@ -5,39 +5,35 @@ tetris/preprocess/p000_preprocess_dataset.py builds it (crop, rotate vertical re
 resize). It is shrunk to its visible extent inside the road mask and kept if its score is at
 least --threshold and at least MIN_VISIBLE of its pixels lie in the mask. The kept boxes are
 tracked at 30 FPS over every source frame of the segment, with the same Cython OC-SORT code,
-settings, and gap interpolation as tetris/preprocess/p003_preprocess_groundtruth_tracking.py,
-imported read-only from /tetris. Runs in the polyis image (IMAGE=polyis-polyis ./run track.py),
-whose Python matches the compiled tracker.
+settings, and gap interpolation as tetris/preprocess/p003_preprocess_groundtruth_tracking.py
+(copied into ocsort/ and below; build it once with ./run setup.py build_ext --inplace).
 
 Output mirrors the cache's 003_groundtruth layout under <out>/<dataset>/teNN.mp4/:
   detection30.jsonl, tracking30.jsonl  every source frame (30 FPS)
   detection.jsonl, tracking.jsonl      the same, sampled at the experiment clip's frames (15 FPS);
                                        these are the pre-labels given to human review
 """
+from __future__ import annotations
+
 import argparse
 import json
 import math
 import os
-import sys
 
 import cv2
 import numpy as np
-import yaml
 
 from b3d import TEST_SEGMENTS, VIDEOS, load_crop_and_mask, segment_range
-
-# tetris checkout, mounted read-only by ./run.
-TETRIS = '/tetris'
-sys.path.insert(0, TETRIS)
-# p003's tracker: the compiled Cython OC-SORT, built for the polyis image's Python (IMAGE=polyis-polyis ./run).
-from polyis.tracker.ocsort.cython.ocsort_wrapper import OCSort  # noqa: E402
-from polyis.utilities import register_tracked_detections, save_tracking_results  # noqa: E402
+from ocsort import OCSort
 
 
 # Experiment frame size (p000 output).
 WIDTH, HEIGHT = 1080, 720
 # Fraction of a detection's pixels that must lie inside the road mask (the visible-extent rule).
 MIN_VISIBLE = 0.25
+# p003's OC-SORT settings, from tetris/configs/trackers.yaml.
+OCSORT = dict(det_thresh=0.3, max_age=20, min_hits=1, iou_threshold=0.1, delta_t=3, asso_func='iou',
+              inertia=0.2, use_byte=True)
 
 
 def parse_args():
@@ -51,19 +47,51 @@ def parse_args():
 
 
 def create_ocsort() -> OCSort:
-    """OC-SORT with tetris's settings; mirrors create_tracker('ocsortcython') in tetris polyis/utilities.py, as p003 uses."""
-    config = yaml.safe_load(open(os.path.join(TETRIS, 'configs', 'trackers.yaml')))['ocsort']
-    return OCSort(
-        img_size=(HEIGHT, WIDTH),
-        det_thresh=config['det_thresh'],
-        max_age=config['max_age'],
-        min_hits=config['min_hits'],
-        iou_threshold=config['iou_threshold'],
-        delta_t=config['delta_t'],
-        asso_func=config['asso_func'],
-        inertia=config['inertia'],
-        use_byte=config['use_byte'],
-    )
+    """OC-SORT with p003's settings; mirrors create_tracker('ocsortcython') in tetris polyis/utilities.py."""
+    return OCSort(img_size=(HEIGHT, WIDTH), **OCSORT)
+
+
+def interpolate_trajectory(trajectory: list[tuple[int, np.ndarray]], nxt: tuple[int, np.ndarray]) -> list[tuple[int, np.ndarray]]:
+    """Linearly interpolated boxes strictly between a track's last point and nxt (tetris polyis/utilities.py)."""
+    extend: list[tuple[int, np.ndarray]] = []
+    if len(trajectory) != 0:
+        prv = trajectory[-1]
+        assert prv[0] < nxt[0]
+        dif_det = (nxt[1] - prv[1]).reshape(1, -1)
+        scale = np.arange(1, nxt[0] - prv[0], dtype=np.float32).reshape(-1, 1) / (nxt[0] - prv[0])
+        int_dets = (scale @ dif_det) + prv[1].reshape(1, -1)
+        for idx, int_det in enumerate(int_dets):
+            extend.append((prv[0] + idx + 1, int_det))
+    return extend
+
+
+def register_tracked_detections(tracked_dets: np.ndarray, frame_idx: int, frame_tracks: dict[int, list[list[float]]],
+                                trajectories: dict[int, list[tuple[int, np.ndarray]]]):
+    """Add a frame's tracker output [x1, y1, x2, y2, id] to frame_tracks, filling gaps (tetris polyis/utilities.py)."""
+    if len(tracked_dets) == 0:
+        return
+    if frame_idx not in frame_tracks:
+        frame_tracks[frame_idx] = []
+    for x1, y1, x2, y2, track_id in tracked_dets:
+        track_id = int(track_id)
+        if track_id not in trajectories:
+            trajectories[track_id] = []
+        box_array = np.array([x1, y1, x2, y2], dtype=np.float32)
+        # Interpolated boxes for frames since this track's last appearance, then this frame's box.
+        for e_frame_idx, e_box in interpolate_trajectory(trajectories[track_id], (frame_idx, box_array)) + [(frame_idx, box_array)]:
+            if e_frame_idx not in frame_tracks:
+                frame_tracks[e_frame_idx] = []
+            frame_tracks[e_frame_idx].append([track_id, *e_box.tolist()])
+            trajectories[track_id].append((e_frame_idx, e_box))
+
+
+def save_tracking_results(frame_tracks: dict[int, list[list[float]]], output_path: str):
+    """Write one JSONL row per frame from the first to the last tracked frame (tetris polyis/utilities.py)."""
+    with open(output_path, 'w') as f:
+        if len(frame_tracks) == 0:
+            return
+        for frame_idx in range(min(frame_tracks), max(frame_tracks) + 1):
+            f.write(json.dumps({'frame_idx': frame_idx, 'tracks': frame_tracks.get(frame_idx, [])}) + '\n')
 
 
 def track(frames: list[list[list[float]]]) -> dict[int, list[list[float]]]:

@@ -2,3 +2,8 @@ viz/
 __pycache__/
 .DS_Store
 cvat/
+build/
+ocsort/*.cpp
+ocsort/*.so
+ocsort/*.html
+ocsort/*.c

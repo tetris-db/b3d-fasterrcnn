@@ -1,11 +1,10 @@
 """Fine-tune detectron2 Faster R-CNN X101-FPN on B3D crops (prep_crops.py), following B3D's train.py.
 
-modules/b3d/train.py registers the COCO crops, loads a model-zoo config with its COCO checkpoint,
+B3D's train.py (github.com/b3d-project/b3d) registers the COCO crops, loads a model-zoo config with its COCO checkpoint,
 sets one class, and trains with detectron2's DefaultTrainer. This keeps that and adds native
 scale (no resizing), label-preserving aerial augmentations (flips, 90-degree rotations, mild
 brightness/contrast), detectron2's standard fine-tuning schedule, validation every epoch, and wandb.
 The defaults reproduce the frcnn-b3d model that generated the B3D pre-labels.
-Runs in tetris-annotate-d2 (B3D's Docker image plus wandb), which is Python 3.7.
 """
 import argparse
 import json
@@ -75,7 +74,7 @@ def build_cfg(args):
     cfg.DATASETS.TRAIN = ('b3d_train',)
     cfg.DATASETS.TEST = ('b3d_valid',)
     cfg.DATALOADER.NUM_WORKERS = args.workers
-    # One 'vehicle' class and B3D's ROI sampling, as in modules/b3d/configs/config_refined.json.
+    # One 'vehicle' class and B3D's ROI sampling, as in B3D's configs/config_refined.json.
     cfg.MODEL.ROI_HEADS.NUM_CLASSES = 1
     cfg.MODEL.ROI_HEADS.BATCH_SIZE_PER_IMAGE = 128
     # One anchor size per FPN level, shifted down one octave for 10-500 px vehicles. B3D's

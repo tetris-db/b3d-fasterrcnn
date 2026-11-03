@@ -1,7 +1,6 @@
 #!/bin/sh
 # Run a Python script in a throwaway container on the GPU server.
-# Usage: ./run detect.py [args...]                  (tetris-annotate-d2: prep_crops, train_frcnn, detect)
-#        IMAGE=polyis-polyis ./run track.py [args...] (the tetris image, for its compiled OC-SORT)
+# Usage: ./run <script>.py [args...]   (image b3d-fasterrcnn, built from ./Dockerfile)
 set -eu
 cd "$(dirname "$0")"
 # ponytail: host paths default to ace's layout; override DATA on other servers.
@@ -13,7 +12,6 @@ i=0; until docker info >/dev/null 2>&1; do i=$((i + 1)); [ $i -le 30 ] || { echo
 docker run --rm --gpus all --shm-size 16g -e CUDA_VISIBLE_DEVICES \
   -v "$PWD:/work" -w /work \
   -v "$DATA/polyis-data/sources:/sources:ro" \
-  -v "$PWD/../tetris:/tetris:ro" \
   -v "$DATA/tetris-annotate:/out" \
   -v "$HOME/.netrc:/root/.netrc:ro" \
-  "${IMAGE:-tetris-annotate-d2}" python "$@"
+  "${IMAGE:-b3d-fasterrcnn}" python "$@"

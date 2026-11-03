@@ -4,7 +4,6 @@ Uses B3D's own train/val/test JSONs (the split the frcnn-b3d model was trained o
 Crops are kept as-is (files copied byte for byte), except crops longer than MAX_SIDE on a
 side, which would not fit in GPU memory at native scale: those are cut into overlapping
 windows of at most MAX_SIDE (no resizing, no padding), with boxes clipped to each window.
-Runs in tetris-annotate-d2 (Python 3.7).
 """
 from __future__ import annotations
 
